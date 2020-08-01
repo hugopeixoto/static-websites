@@ -1,0 +1,99 @@
+#!/usr/bin/env ruby
+
+require 'yaml'
+
+def humanize_duration(duration)
+  duration = (duration * 1000).to_i
+
+  msecs = duration%1000
+  secs = (duration/1000)%60
+  mins = (duration/1000/60)%60
+  hours = (duration/1000/60/60)%60
+
+  "#{hours}h #{mins}m #{secs}s #{msecs}ms"
+end
+
+def fetch_app(app, config)
+  if config["repository"].nil?
+    STDERR.puts "  fetch: skipped"
+    return
+  else
+    STDERR.puts "  fetch: #{config["repository"]}"
+  end
+
+  repo_dirname = "repos/#{config["repository"].gsub(/\//, "_")}"
+
+  if File.exists?(repo_dirname)
+    STDERR.print `git -C #{repo_dirname} restore .`
+    STDERR.print `git -C #{repo_dirname} clean -fdx`
+    STDERR.print `git -C #{repo_dirname} pull origin`
+  else
+    STDERR.print `git clone #{config["repository"]} #{repo_dirname}`
+  end
+end
+
+def build_nginx_config(app, config)
+  domains = config["domains"].split(" ")
+  primary_domain = domains.first
+
+  extra_config = config.fetch("extra_config", "").split("\n")
+
+<<EOF
+server {
+	listen 443 ssl;
+	listen [::]:443 ssl;
+	charset UTF-8;
+
+	ssl_certificate /etc/letsencrypt/live/#{primary_domain}/fullchain.pem;
+	ssl_certificate_key /etc/letsencrypt/live/#{primary_domain}/privkey.pem;
+	# add_header Strict-Transport-Security "max-age=31536000; includeSubDomains" always;
+
+	server_name #{domains.join(" ")};
+
+	#{config["redirect"] ? "return 301 #{config["redirect"]};" : "root /srv/www/#{primary_domain}/public/;"}
+#{extra_config.map{|line| line.empty? ? "#{line}\n" : "\t#{line}\n"}.join}}
+EOF
+end
+
+def build_app(app, config)
+  return if config["repository"].nil?
+
+  repo_dirname = "repos/#{config["repository"].gsub(/\//, "_")}"
+
+  if config["build"]
+    STDERR.print `cd #{repo_dirname}; #{config["build"]}`
+  elsif File.exist?("#{repo_dirname}/Makefile")
+    STDERR.print `cd #{repo_dirname}; make`
+  end
+end
+
+def time
+  before = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+  yield
+  after = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+  STDERR.puts "  Took #{humanize_duration(after - before)}"
+end
+
+Dir["sites/*"].each do |f|
+  app = File.basename(f)
+  STDERR.puts "deploying #{app}"
+
+  config = YAML.load(File.read(f))
+
+  fetch_app(app, config)
+  time { build_app(app, config) }
+
+  new = build_nginx_config(app, config)
+  old = `ssh root@git.hugopeixoto.net cat /etc/nginx/sites-enabled/#{File.basename(f)}`
+
+  new_lines = new.split("\n")
+  old_lines = old.split("\n")
+
+  (new_lines + [""]*([0,old_lines.size - new_lines.size].max)).zip(old_lines).each_with_index do |(a,b), idx|
+    if a != b
+      puts "line #{idx + 1}:"
+      puts "< #{a}"
+      puts "> #{b}"
+    end
+  end
+end
