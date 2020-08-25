@@ -13,7 +13,7 @@ def humanize_duration(duration)
   "#{hours}h #{mins}m #{secs}s #{msecs}ms"
 end
 
-def fetch_app(app, config)
+def fetch_app(config)
   if config["repository"].nil?
     STDERR.puts "  fetch: skipped"
     return
@@ -21,7 +21,7 @@ def fetch_app(app, config)
     STDERR.puts "  fetch: #{config["repository"]}"
   end
 
-  repo_dirname = "repos/#{config["repository"].gsub(/\//, "_")}"
+  repo_dirname = config["repository_directory"]
 
   if File.exists?(repo_dirname)
     STDERR.print `git -C #{repo_dirname} restore .`
@@ -32,38 +32,74 @@ def fetch_app(app, config)
   end
 end
 
-def build_nginx_config(app, config)
-  domains = config["domains"].split(" ")
-  primary_domain = domains.first
-
+def build_nginx_config(config)
+  domains = config["domains"]
+  primary_domain = config["primary_domain"]
   extra_config = config.fetch("extra_config", "").split("\n")
 
 <<EOF
 server {
-	listen 443 ssl;
-	listen [::]:443 ssl;
-	charset UTF-8;
+  listen 443 ssl;
+  listen [::]:443 ssl;
+  charset UTF-8;
 
-	ssl_certificate /etc/letsencrypt/live/#{primary_domain}/fullchain.pem;
-	ssl_certificate_key /etc/letsencrypt/live/#{primary_domain}/privkey.pem;
-	# add_header Strict-Transport-Security "max-age=31536000; includeSubDomains" always;
+  ssl_certificate /etc/letsencrypt/live/#{primary_domain}/fullchain.pem;
+  ssl_certificate_key /etc/letsencrypt/live/#{primary_domain}/privkey.pem;
+  add_header Strict-Transport-Security "max-age=31536000; includeSubDomains" always;
 
-	server_name #{domains.join(" ")};
+  server_name #{domains.join(" ")};
 
-	#{config["redirect"] ? "return 301 #{config["redirect"]};" : "root /srv/www/#{primary_domain}/public/;"}
+  #{config["redirect"] ? "return 301 #{config["redirect"]};" : "root /srv/www/#{primary_domain}/public/;"}
 #{extra_config.map{|line| line.empty? ? "#{line}\n" : "\t#{line}\n"}.join}}
 EOF
 end
 
-def build_app(app, config)
+def build_app(config)
   return if config["repository"].nil?
 
-  repo_dirname = "repos/#{config["repository"].gsub(/\//, "_")}"
+  repo_dirname = config["repository_directory"]
 
   if config["build"]
     STDERR.print `cd #{repo_dirname}; #{config["build"]}`
   elsif File.exist?("#{repo_dirname}/Makefile")
     STDERR.print `cd #{repo_dirname}; make`
+  end
+end
+
+def make_cert(config, server)
+  # ssh #{server} static-websites-remote cert #{config["domains"].join(" ")}
+  `ssh #{server} test -d "/etc/letsencrypt/live/#{config["primary_domain"]}"`
+
+  if $?.exitstatus != 0
+    `ssh #{server} letsencrypt certonly --webroot -w "/srv/www/default/" #{config["domains"].join(" ")}`
+  end
+end
+
+def upload_app(config, server)
+  return if config["redirect"]
+
+  repo_dirname = config["repository_directory"]
+
+  `rsync -a "#{repo_dirname}/#{config.fetch("directory", "build")}/" #{server}:/srv/www/#{config["primary_domain"]}/public`
+end
+
+def refresh_nginx(config, server)
+  # ssh #{server} static-websites-remote nginx #{config["primary_domain"]}
+  primary_domain = config["primary_domain"]
+
+  new = build_nginx_config(config)
+  old = `ssh #{server} cat /etc/nginx/sites-available/#{primary_domain}`
+
+  if new != old
+    IO.popen("ssh #{server} 'cat > /etc/nginx/sites-available/#{primary_domain}'", "w") {|io| io.write new }
+    puts $?
+
+  end
+
+  `ssh #{server} test -f "/etc/nginx/sites-enabled/#{primary_domain}"`
+
+  if $?.exitstatus != 0
+    `ssh #{server} ln -s /etc/nginx/sites-available/#{primary_domain} /etc/nginx/sites-enabled/#{primary_domain}`
   end
 end
 
@@ -74,26 +110,29 @@ def time
   STDERR.puts "  Took #{humanize_duration(after - before)}"
 end
 
-Dir["sites/*"].each do |f|
-  app = File.basename(f)
-  STDERR.puts "deploying #{app}"
+def parse_config(filename)
+  config = YAML.load(File.read(filename))
+  config["domains"] = config["domains"].split(" ")
+  config["primary_domain"] = config["domains"].first
 
-  config = YAML.load(File.read(f))
-
-  fetch_app(app, config)
-  time { build_app(app, config) }
-
-  new = build_nginx_config(app, config)
-  old = `ssh root@git.hugopeixoto.net cat /etc/nginx/sites-enabled/#{File.basename(f)}`
-
-  new_lines = new.split("\n")
-  old_lines = old.split("\n")
-
-  (new_lines + [""]*([0,old_lines.size - new_lines.size].max)).zip(old_lines).each_with_index do |(a,b), idx|
-    if a != b
-      puts "line #{idx + 1}:"
-      puts "< #{a}"
-      puts "> #{b}"
-    end
+  if config["repository"]
+    config["repository_directory"] = "repos/#{config["repository"].gsub(/\//, "_")}"
   end
+
+  config
+end
+
+Dir["sites/*"].each do |filename|
+  server = ARGV[0]
+  STDERR.puts "deploying #{File.basename(filename)}"
+
+  config = parse_config(filename)
+
+  time { fetch_app(config) }
+  time { build_app(config) }
+  time { make_cert(config, server) }
+  time { upload_app(config, server) }
+  time { refresh_nginx(config, server) }
+
+  `ssh #{server} service nginx reload`
 end
