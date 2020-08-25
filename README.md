@@ -77,3 +77,43 @@ Here's a list of supported keys:
 | `build` | no | The command to build the website, if needed. Defaults to `make` if a Makefile is available |
 | `directory` | no | The directory to upload to the host, after running the build command. Defaults to `build` |
 | `extra_config` | no | Extra nginx configuration. Useful to add rewrites, for example |
+
+### Example descriptions
+
+Redirection only website, multiple domains:
+
+~~~~yaml
+domains: lifeonmars.io www.lifeonmars.io
+redirect: https://lifeonmars.pt$request_uri
+~~~~
+
+Website with no build step:
+
+~~~~yaml
+domains: archive.makeorbreak.io
+repository: git@github.com:makeorbreak-io/web-archive.git
+directory: archive
+~~~~
+
+Node.js website:
+
+~~~~yaml
+domains: vasteroids.lifeonmars.pt
+repository: git@github.com:lifeonmarspt/vasteroids.git
+directory: public
+build: yarn && yarn run webpack
+~~~~
+
+Extra nginx configuration:
+
+~~~~yaml
+domains: hugopeixoto.net
+repository: git@github.com:hugopeixoto/hugopeixoto.net.git
+directory: build
+extra_config: |
+
+  try_files $uri.html $uri $uri/index.html =404;
+
+  rewrite ^/blog/feed.xml$ $scheme://$host/articles.xml permanent;
+  rewrite ^/blog/(.*).html $scheme://$host/articles/$1.html permanent;
+~~~~
