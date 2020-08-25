@@ -71,7 +71,7 @@ def make_cert(config, server)
   `ssh #{server} test -d "/etc/letsencrypt/live/#{config["primary_domain"]}"`
 
   if $?.exitstatus != 0
-    `ssh #{server} letsencrypt certonly --webroot -w "/srv/www/default/" #{config["domains"].join(" ")}`
+    `ssh #{server} letsencrypt certonly --webroot -w "/srv/www/default/" #{config["domains"].map{|d|"-d #{d}"}.join(" ")}`
   end
 end
 
@@ -80,6 +80,7 @@ def upload_app(config, server)
 
   repo_dirname = config["repository_directory"]
 
+  `ssh #{server} mkdir -p /srv/www/#{config["primary_domain"]}/public`
   `rsync -a "#{repo_dirname}/#{config.fetch("directory", "build")}/" #{server}:/srv/www/#{config["primary_domain"]}/public`
 end
 
@@ -122,8 +123,8 @@ def parse_config(filename)
   config
 end
 
+server = ARGV[0]
 Dir["sites/*"].each do |filename|
-  server = ARGV[0]
   STDERR.puts "deploying #{File.basename(filename)}"
 
   config = parse_config(filename)
