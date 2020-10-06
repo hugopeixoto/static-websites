@@ -5,8 +5,8 @@ Self hosted netlify, kind of?
 I host a bunch of static websites on my web server. This helps me keep track of
 what's there and a way to automate its setup.
 
-`static-websites` works by adding files to `sites/`, each one describing a website. For
-example, I have a file `sites/hugopeixoto.net`:
+`static-websites` works by adding files to `sites/`, each one describing a
+website. For example, I have a file `sites/hugopeixoto.net`:
 
 ```yaml
 domains: hugopeixoto.net
@@ -29,13 +29,15 @@ root@example.com`.
 
 ## Hardcoded assumptions
 
-There are some hardcoded paths in the scripts. I might make them configurable eventually, but for now:
+There are some hardcoded paths in the scripts. I might make them configurable
+eventually, but for now:
 
 - Websites will be deployed to `/srv/www/<primary-domain>/public`
 - Every website will be configured with HTTPS
 - Uses `letsencrypt`, and not `certbot` (I need to upgrade my ubuntu soon)
 - Uses `/srv/www/default` as the webroot for letsencrypt certificates
-- Assumes you have HTTP requests being redirected to HTTPS, except for `/.well-known/acme-challenge/` paths
+- Assumes you have HTTP requests being redirected to HTTPS, except for
+  `/.well-known/acme-challenge/` paths
 - Enables HSTS for every website
 - Reloads nginx with `service nginx reload`
 - Serves files with charset UTF-8
