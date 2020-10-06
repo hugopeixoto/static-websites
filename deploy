@@ -71,7 +71,7 @@ def make_cert(config, server)
   `ssh #{server} test -d "/etc/letsencrypt/live/#{config["primary_domain"]}"`
 
   if $?.exitstatus != 0
-    `ssh #{server} letsencrypt certonly --webroot -w "/srv/www/default/" #{config["domains"].map{|d|"-d #{d}"}.join(" ")}`
+    `ssh #{server} certbot certonly --webroot -w "/srv/www/default/" #{config["domains"].map{|d|"-d #{d}"}.join(" ")}`
   end
 end
 

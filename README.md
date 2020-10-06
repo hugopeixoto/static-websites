@@ -34,7 +34,6 @@ eventually, but for now:
 
 - Websites will be deployed to `/srv/www/<primary-domain>/public`
 - Every website will be configured with HTTPS
-- Uses `letsencrypt`, and not `certbot` (I need to upgrade my ubuntu soon)
 - Uses `/srv/www/default` as the webroot for letsencrypt certificates
 - Assumes you have HTTP requests being redirected to HTTPS, except for
   `/.well-known/acme-challenge/` paths
