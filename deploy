@@ -124,7 +124,10 @@ def parse_config(filename)
 end
 
 server = ARGV[0]
-Dir["sites/*"].each do |filename|
+
+pattern = ARGV[1] ? "sites/#{ARGV[1]}" : "sites/*"
+
+Dir[pattern].each do |filename|
   STDERR.puts "deploying #{File.basename(filename)}"
 
   config = parse_config(filename)
