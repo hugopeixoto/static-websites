@@ -3,14 +3,17 @@
 require 'yaml'
 
 def humanize_duration(duration)
-  duration = (duration * 1000).to_i
+  "#{duration.round(3)} seconds"
+end
 
-  msecs = duration%1000
-  secs = (duration/1000)%60
-  mins = (duration/1000/60)%60
-  hours = (duration/1000/60/60)%60
+def run(command)
+  STDERR.print "  run: #{command}\n"
+  output = `#{command}`
+  result = $?
 
-  "#{hours}h #{mins}m #{secs}s #{msecs}ms"
+  if !result.success?
+    STDERR.puts output
+  end
 end
 
 def fetch_app(config)
@@ -24,11 +27,11 @@ def fetch_app(config)
   repo_dirname = config["repository_directory"]
 
   if File.exists?(repo_dirname)
-    STDERR.print `git -C #{repo_dirname} restore .`
-    STDERR.print `git -C #{repo_dirname} clean -fdx`
-    STDERR.print `git -C #{repo_dirname} pull origin`
+    run "git -C #{repo_dirname} restore ."
+    run "git -C #{repo_dirname} clean -fdx"
+    run "git -C #{repo_dirname} pull origin"
   else
-    STDERR.print `git clone #{config["repository"]} #{repo_dirname}`
+    run "git clone #{config["repository"]} #{repo_dirname}"
   end
 end
 
@@ -60,18 +63,17 @@ def build_app(config)
   repo_dirname = config["repository_directory"]
 
   if config["build"]
-    STDERR.print `cd #{repo_dirname}; #{config["build"]}`
+    run "cd #{repo_dirname}; #{config["build"]}"
   elsif File.exist?("#{repo_dirname}/Makefile")
-    STDERR.print `cd #{repo_dirname}; make`
+    run "cd #{repo_dirname}; make"
   end
 end
 
 def make_cert(config, server)
-  # ssh #{server} static-websites-remote cert #{config["domains"].join(" ")}
   `ssh #{server} test -d "/etc/letsencrypt/live/#{config["primary_domain"]}"`
 
   if $?.exitstatus != 0
-    `ssh #{server} certbot certonly --webroot -w "/srv/www/default/" #{config["domains"].map{|d|"-d #{d}"}.join(" ")}`
+    run "ssh #{server} certbot certonly --webroot -w "/srv/www/default/" #{config["domains"].map{|d|"-d #{d}"}.join(" ")}"
   end
 end
 
@@ -80,12 +82,11 @@ def upload_app(config, server)
 
   repo_dirname = config["repository_directory"]
 
-  `ssh #{server} mkdir -p /srv/www/#{config["primary_domain"]}/public`
-  `rsync -a "#{repo_dirname}/#{config.fetch("directory", "build")}/" #{server}:/srv/www/#{config["primary_domain"]}/public`
+  run "ssh #{server} mkdir -p /srv/www/#{config["primary_domain"]}/public"
+  run "rsync -a '#{repo_dirname}/#{config.fetch("directory", "build")}/' #{server}:/srv/www/#{config["primary_domain"]}/public"
 end
 
 def refresh_nginx(config, server)
-  # ssh #{server} static-websites-remote nginx #{config["primary_domain"]}
   primary_domain = config["primary_domain"]
 
   new = build_nginx_config(config)
@@ -102,13 +103,15 @@ def refresh_nginx(config, server)
   if $?.exitstatus != 0
     `ssh #{server} ln -s /etc/nginx/sites-available/#{primary_domain} /etc/nginx/sites-enabled/#{primary_domain}`
   end
+
+  run "ssh #{server} service nginx reload"
 end
 
 def time
   before = Process.clock_gettime(Process::CLOCK_MONOTONIC)
   yield
   after = Process.clock_gettime(Process::CLOCK_MONOTONIC)
-  STDERR.puts "  Took #{humanize_duration(after - before)}"
+  STDERR.puts "  took #{humanize_duration(after - before)}"
 end
 
 def parse_config(filename)
@@ -123,7 +126,7 @@ def parse_config(filename)
   config
 end
 
-server = ARGV[0]
+server = ARGV.fetch(0)
 
 pattern = ARGV[1] ? "sites/#{ARGV[1]}" : "sites/*"
 
@@ -132,11 +135,11 @@ Dir[pattern].each do |filename|
 
   config = parse_config(filename)
 
-  time { fetch_app(config) }
-  time { build_app(config) }
-  time { make_cert(config, server) }
-  time { upload_app(config, server) }
-  time { refresh_nginx(config, server) }
-
-  `ssh #{server} service nginx reload`
+  time do
+    fetch_app(config)
+    build_app(config)
+    make_cert(config, server)
+    upload_app(config, server)
+    refresh_nginx(config, server)
+  end
 end
