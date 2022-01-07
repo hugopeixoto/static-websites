@@ -16,16 +16,33 @@ build: make
 ```
 
 This defines that `hugopeixoto.net` should be deployed by cloning my github
-repo, calling `make`, and uploading `build`.
+repo, calling `make`, and uploading the directory `build/`.
 
 To deploy **every** website in `sites/` to a single host, run:
 
 ```
-./deploy root@example.com
+static-websites root@example.com
 ```
 
-Where `example.com` is the address of your server. This assumes you can `ssh
-root@example.com`.
+Where `root@example.com` is the username and address of your server. This
+assumes you can ssh and rsync to `root@example.com`.
+
+
+## Configuration file
+
+`static-websites` looks for a `sites.yml` file in the current working directory.
+In this file you can specify some options, including the target server:
+
+```
+server: root@example.com
+build_dir: build/repos
+sites_dir: sites
+```
+
+`server` is the server where things will be deployed. `build_dir` is the
+directory where the website repositories will be cloned. `sites_dir` is the
+directory where to look for the websites configuraation.
+
 
 ## Hardcoded assumptions
 

@@ -1,0 +1,149 @@
+#!/usr/bin/env ruby
+
+require 'yaml'
+
+def run(command)
+  STDERR.print "  run: #{command}\n"
+  output = `#{command} 2>&1`
+  result = $?
+
+  if !result.success?
+    STDERR.puts output
+  end
+end
+
+class Website
+  attr_reader :config
+  def initialize(config)
+    @config = config
+  end
+
+  def fetch
+    if config["repository"].nil?
+      STDERR.puts "  fetch: skipped"
+      return
+    else
+      STDERR.puts "  fetch: #{config["repository"]}"
+
+      repo_dirname = config.fetch("repository_directory")
+      if File.exists?(repo_dirname)
+        run "git -C #{repo_dirname} restore ."
+        run "git -C #{repo_dirname} clean -fdx"
+        run "git -C #{repo_dirname} pull origin"
+      else
+        run "git clone #{config["repository"]} #{repo_dirname}"
+      end
+    end
+  end
+
+  def build_nginx_config
+    domains = config["domains"]
+    primary_domain = config.fetch("primary_domain")
+    extra_config = config.fetch("extra_config", "").split("\n")
+    redirect = config["redirect"]
+
+<<EOF
+server {
+  listen 443 ssl;
+  listen [::]:443 ssl;
+  charset UTF-8;
+
+  ssl_certificate /etc/letsencrypt/live/#{primary_domain}/fullchain.pem;
+  ssl_certificate_key /etc/letsencrypt/live/#{primary_domain}/privkey.pem;
+  add_header Strict-Transport-Security "max-age=31536000; includeSubDomains" always;
+
+  server_name #{domains.join(" ")};
+
+  #{redirect ? "return 301 #{redirect};" : "root /srv/www/#{primary_domain}/public/;"}
+#{extra_config.map{|line| line.empty? ? "\n" : "  #{line}\n"}.join}}
+EOF
+  end
+
+  def build
+    return if config["repository"].nil?
+
+    repo_dirname = config["repository_directory"]
+
+    if config["build"]
+      run "cd #{repo_dirname}; #{config["build"]}"
+    elsif File.exist?("#{repo_dirname}/Makefile")
+      run "cd #{repo_dirname}; make"
+    end
+  end
+
+  def make_cert(server)
+    `ssh #{server} test -d "/etc/letsencrypt/live/#{config["primary_domain"]}"`
+
+    if $?.exitstatus != 0
+      run "ssh #{server} certbot certonly --webroot -w "/srv/www/default/" #{config["domains"].map{|d|"-d #{d}"}.join(" ")}"
+    end
+  end
+
+  def upload(server)
+    return if config["redirect"]
+
+    repo_dirname = config["repository_directory"]
+
+    run "ssh #{server} mkdir -p /srv/www/#{config["primary_domain"]}/public"
+    run "rsync -a '#{repo_dirname}/#{config.fetch("directory", "build")}/' #{server}:/srv/www/#{config["primary_domain"]}/public"
+  end
+
+  def refresh_nginx(server)
+    primary_domain = config.fetch("primary_domain")
+
+    new = build_nginx_config
+    old = `ssh #{server} cat /etc/nginx/sites-available/#{primary_domain}`
+
+    if new != old
+      IO.popen("ssh #{server} 'cat > /etc/nginx/sites-available/#{primary_domain}'", "w") { |io| io.write new }
+    end
+
+    `ssh #{server} test -f "/etc/nginx/sites-enabled/#{primary_domain}"`
+
+    if $?.exitstatus != 0
+      `ssh #{server} ln -s /etc/nginx/sites-available/#{primary_domain} /etc/nginx/sites-enabled/#{primary_domain}`
+    end
+
+    run "ssh #{server} service nginx reload"
+  end
+end
+
+def parse_config(filename, global_config)
+  config = YAML.load(File.read(filename))
+  config["domains"] = config.fetch("domains").split(" ")
+  config["primary_domain"] = config.fetch("domains").first
+
+  if config["repository"]
+    config["repository_directory"] = "#{global_config.fetch("build_dir")}/#{config.fetch("repository").gsub(/\//, "_")}"
+  end
+
+  config
+end
+
+if File.exists?("sites.yml")
+  global_config = YAML.load(File.read("sites.yml"))
+else
+  global_config = {}
+end
+
+global_config["server"] ||= ARGV.fetch(0)
+global_config["build_dir"] ||= "repos"
+global_config["sites_dir"] ||= "sites"
+
+Dir["#{global_config.fetch("sites_dir")}/#{ARGV.fetch(1, "*")}"].each do |filename|
+  before = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+
+  STDERR.puts "deploying #{File.basename(filename)}"
+
+  website = Website.new(parse_config(filename, global_config))
+
+  server = global_config["server"]
+  website.fetch
+  website.build
+  website.make_cert(server)
+  website.upload(server)
+  website.refresh_nginx(server)
+
+  after = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+  STDERR.puts "  took #{(after - before).round(3)} seconds"
+end
